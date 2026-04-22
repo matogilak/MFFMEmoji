@@ -1,19 +1,21 @@
-# [Emoji] iOS 26.4
+# Emoji Module Template
 
-Adaptive emoji font module for Magisk, KernelSU, and APatch.
+Template repository for building emoji font modules for Magisk, KernelSU, and APatch.
 
-This repository packages `Emoji.ttf` into a flashable root module and applies an aggressive runtime repair flow to keep emoji fonts replaced across system and app data locations. The current module metadata is sourced from [`module.prop`](https://github.com/mistu01/MFFMEmoji/blob/main/module.prop).
+This repository packages `Emoji.ttf` into a flashable root module and applies an aggressive runtime repair flow to keep emoji fonts replaced across system and app data locations. The module identity, release name, version, author, and description are all read from [`module.prop`](https://github.com/mistu01/MFFMEmoji/blob/main/module.prop), so this template can be reused for any emoji pack.
 
-## Current Module Info
+## Template Metadata
 
-| Field | Value |
-| --- | --- |
-| ID | `mffmemoji` |
-| Name | `[Emoji] iOS 26.4` |
-| Version | `22.04.2607` |
-| Version code | `220426` |
-| Author | `MFFM` |
-| Description | Adaptive emoji module with aggressive data-font replacement for Magisk, KernelSU, and APatch. |
+The template expects these fields in [`module.prop`](https://github.com/mistu01/MFFMEmoji/blob/main/module.prop):
+
+- `id`
+- `name`
+- `version`
+- `versionCode`
+- `author`
+- `description`
+
+Those values are used by both the module itself and the GitHub release workflow.
 
 ## What It Does
 
@@ -78,8 +80,9 @@ GitHub Actions is configured in [`.github/workflows/build-release.yml`](https://
 ## Updating the Module
 
 1. Replace [`Emoji.ttf`](https://github.com/mistu01/MFFMEmoji/blob/main/Emoji.ttf) with the new font payload.
-2. Update [`module.prop`](https://github.com/mistu01/MFFMEmoji/blob/main/module.prop) if the module name, version, or description changed.
-3. Commit and push to `main` or `master`, or run the workflow manually from GitHub Actions.
+2. Update [`module.prop`](https://github.com/mistu01/MFFMEmoji/blob/main/module.prop) with the module name, version, author, and description you want for that build.
+3. Adjust any behavior flags in [`targets.conf`](https://github.com/mistu01/MFFMEmoji/blob/main/targets.conf) if needed.
+4. Commit and push to `main` or `master`, or run the workflow manually from GitHub Actions.
 
 ## License
 
