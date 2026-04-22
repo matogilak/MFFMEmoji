@@ -37,8 +37,8 @@ jobs:
 
           module_id="$(get_prop id)"
           module_name="$(get_prop name)"
-          module_version="$(get_prop version)"
-          module_version_code="$(get_prop versionCode)"
+          source_module_version="$(get_prop version)"
+          source_module_version_code="$(get_prop versionCode)"
           module_author="$(get_prop author)"
           module_description="$(get_prop description)"
           safe_module_name="$(printf '%s' "${module_name}" | sed -E 's/[^A-Za-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g')"
@@ -49,18 +49,24 @@ jobs:
           commit_author="$(git log -1 --format=%an)"
           commit_date="$(git log -1 --date=iso-strict --format=%ad)"
           branch_name="${GITHUB_REF_NAME}"
+          build_version="${short_sha}"
+          build_version_code="$(TZ=Asia/Dhaka date +%d%m%Y)"
 
-          release_tag="${module_id}-v${module_version}-${short_sha}"
-          asset_name="${safe_module_name}-${module_version}-${short_sha}.zip"
-          release_name="${module_name} ${module_version} (${short_sha})"
+          release_tag="${module_id}-${build_version_code}-${build_version}"
+          asset_name="${safe_module_name}-${build_version_code}-${build_version}.zip"
+          release_name="${module_name} ${build_version_code} (${build_version})"
           release_body="$(printf '%s\n' \
             '## Module Information' \
             "- Name: ${module_name}" \
             "- ID: \`${module_id}\`" \
-            "- Version: \`${module_version}\`" \
-            "- Version code: \`${module_version_code}\`" \
+            "- Build version: \`${build_version}\`" \
+            "- Build version code: \`${build_version_code}\`" \
             "- Author: ${module_author}" \
             "- Description: ${module_description}" \
+            '' \
+            '## Template Metadata' \
+            "- Source version: \`${source_module_version}\`" \
+            "- Source version code: \`${source_module_version_code}\`" \
             '' \
             '## Commit Information' \
             "- Commit: \`${short_sha}\`" \
@@ -77,8 +83,8 @@ jobs:
             echo "module_id=${module_id}"
             echo "module_name=${module_name}"
             echo "safe_module_name=${safe_module_name}"
-            echo "module_version=${module_version}"
-            echo "module_version_code=${module_version_code}"
+            echo "source_module_version=${source_module_version}"
+            echo "source_module_version_code=${source_module_version_code}"
             echo "module_author=${module_author}"
             echo "module_description=${module_description}"
             echo "short_sha=${short_sha}"
@@ -87,6 +93,8 @@ jobs:
             echo "commit_author=${commit_author}"
             echo "commit_date=${commit_date}"
             echo "branch_name=${branch_name}"
+            echo "build_version=${build_version}"
+            echo "build_version_code=${build_version_code}"
             echo "release_tag=${release_tag}"
             echo "asset_name=${asset_name}"
             echo "release_name=${release_name}"
@@ -109,6 +117,9 @@ jobs:
             ! -name 'build' \
             ! -name 'LICENSE' \
             -exec cp -a {} build/package/ \;
+
+          sed -i "s/^version=.*/version=${{ steps.meta.outputs.build_version }}/" build/package/module.prop
+          sed -i "s/^versionCode=.*/versionCode=${{ steps.meta.outputs.build_version_code }}/" build/package/module.prop
 
           (
             cd build/package
