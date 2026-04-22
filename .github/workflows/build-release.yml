@@ -1,0 +1,135 @@
+name: Build and Release Magisk Module
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - Emoji.ttf
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read module and commit metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          get_prop() {
+            local key="$1"
+            grep -m1 "^${key}=" module.prop | cut -d'=' -f2-
+          }
+
+          module_id="$(get_prop id)"
+          module_name="$(get_prop name)"
+          module_version="$(get_prop version)"
+          module_version_code="$(get_prop versionCode)"
+          module_author="$(get_prop author)"
+          module_description="$(get_prop description)"
+          safe_module_name="$(printf '%s' "${module_name}" | sed -E 's/[^A-Za-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g')"
+
+          short_sha="$(git rev-parse --short HEAD)"
+          full_sha="$(git rev-parse HEAD)"
+          commit_subject="$(git log -1 --format=%s)"
+          commit_author="$(git log -1 --format=%an)"
+          commit_date="$(git log -1 --date=iso-strict --format=%ad)"
+          branch_name="${GITHUB_REF_NAME}"
+
+          release_tag="${module_id}-v${module_version}-${short_sha}"
+          asset_name="${safe_module_name}-${module_version}-${short_sha}.zip"
+          release_name="${module_name} ${module_version} (${short_sha})"
+
+          {
+            echo "module_id=${module_id}"
+            echo "module_name=${module_name}"
+            echo "safe_module_name=${safe_module_name}"
+            echo "module_version=${module_version}"
+            echo "module_version_code=${module_version_code}"
+            echo "module_author=${module_author}"
+            echo "module_description=${module_description}"
+            echo "short_sha=${short_sha}"
+            echo "full_sha=${full_sha}"
+            echo "commit_subject=${commit_subject}"
+            echo "commit_author=${commit_author}"
+            echo "commit_date=${commit_date}"
+            echo "branch_name=${branch_name}"
+            echo "release_tag=${release_tag}"
+            echo "asset_name=${asset_name}"
+            echo "release_name=${release_name}"
+            echo "release_body<<EOF"
+            cat <<EOF
+## Module Information
+- Name: ${module_name}
+- ID: \`${module_id}\`
+- Version: \`${module_version}\`
+- Version code: \`${module_version_code}\`
+- Author: ${module_author}
+- Description: ${module_description}
+
+## Commit Information
+- Commit: \`${short_sha}\`
+- Full SHA: \`${full_sha}\`
+- Message: ${commit_subject}
+- Author: ${commit_author}
+- Date: ${commit_date}
+- Branch: \`${branch_name}\`
+
+Built automatically from the current repository state.
+EOF
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build Magisk module zip
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p build/package
+          find . -mindepth 1 -maxdepth 1 \
+            ! -name '.git' \
+            ! -name '.github' \
+            ! -name '.gitattributes' \
+            ! -name 'build' \
+            ! -name 'LICENSE' \
+            -exec cp -a {} build/package/ \;
+
+          (
+            cd build/package
+            zip -r "../${{ steps.meta.outputs.asset_name }}" .
+          )
+
+          echo "asset_path=build/${{ steps.meta.outputs.asset_name }}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.module_id }}-build
+          path: ${{ steps.build.outputs.asset_path }}
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          name: ${{ steps.meta.outputs.release_name }}
+          body: ${{ steps.meta.outputs.release_body }}
+          target_commitish: ${{ github.sha }}
+          files: ${{ steps.build.outputs.asset_path }}
+          make_latest: true
