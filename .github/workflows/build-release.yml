@@ -55,6 +55,25 @@ jobs:
           release_tag="${module_id}-v${module_version}-${short_sha}"
           asset_name="${safe_module_name}-${module_version}-${short_sha}.zip"
           release_name="${module_name} ${module_version} (${short_sha})"
+          release_body="$(printf '%s\n' \
+            '## Module Information' \
+            "- Name: ${module_name}" \
+            "- ID: \`${module_id}\`" \
+            "- Version: \`${module_version}\`" \
+            "- Version code: \`${module_version_code}\`" \
+            "- Author: ${module_author}" \
+            "- Description: ${module_description}" \
+            '' \
+            '## Commit Information' \
+            "- Commit: \`${short_sha}\`" \
+            "- Full SHA: \`${full_sha}\`" \
+            "- Message: ${commit_subject}" \
+            "- Author: ${commit_author}" \
+            "- Date: ${commit_date}" \
+            "- Branch: \`${branch_name}\`" \
+            '' \
+            'Built automatically from the current repository state.' \
+          )"
 
           {
             echo "module_id=${module_id}"
@@ -74,25 +93,7 @@ jobs:
             echo "asset_name=${asset_name}"
             echo "release_name=${release_name}"
             echo "release_body<<EOF"
-            cat <<EOF
-## Module Information
-- Name: ${module_name}
-- ID: \`${module_id}\`
-- Version: \`${module_version}\`
-- Version code: \`${module_version_code}\`
-- Author: ${module_author}
-- Description: ${module_description}
-
-## Commit Information
-- Commit: \`${short_sha}\`
-- Full SHA: \`${full_sha}\`
-- Message: ${commit_subject}
-- Author: ${commit_author}
-- Date: ${commit_date}
-- Branch: \`${branch_name}\`
-
-Built automatically from the current repository state.
-EOF
+            printf '%s\n' "${release_body}"
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
 
