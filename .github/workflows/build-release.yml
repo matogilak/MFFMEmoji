@@ -50,19 +50,15 @@ jobs:
           commit_date="$(git log -1 --date=iso-strict --format=%ad)"
           branch_name="${GITHUB_REF_NAME}"
           build_version="${short_sha}"
-          build_version_code="$(TZ=Asia/Dhaka date +%d%m%Y)"
+          build_version_code="$(shuf -i 100000000-2147483647 -n 1)"
 
           release_tag="${module_id}-${build_version_code}-${build_version}"
           asset_name="${safe_module_name}-${build_version_code}-${build_version}.zip"
           release_name="${module_name} ${build_version_code} (${build_version})"
           release_body="$(printf '%s\n' \
-            '## Module Information' \
-            "- Name: ${module_name}" \
-            "- ID: \`${module_id}\`" \
+            '## Build Information' \
             "- Build version: \`${build_version}\`" \
             "- Build version code: \`${build_version_code}\`" \
-            "- Author: ${module_author}" \
-            "- Description: ${module_description}" \
             '' \
             '## Template Metadata' \
             "- Source version: \`${source_module_version}\`" \
