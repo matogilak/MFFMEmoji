@@ -1,6 +1,6 @@
 id=mffmemoji
 name=[Emoji] iOS 26.4
-version=22.04.2607
-versionCode=220426
+version=23.04.26
+versionCode=230426
 author=MFFM
 description=Adaptive emoji module with aggressive data-font replacement for Magisk, KernelSU, and APatch.
