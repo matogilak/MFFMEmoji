@@ -12,17 +12,23 @@ DATA_FONT_PATHS_FILE="$STATE_DIR/data-font-paths.list"
 RUN_DATA_FONT_PATHS_FILE="$STATE_DIR/data-font-paths.run"
 TOUCHED_PACKAGES_FILE="$STATE_DIR/touched-packages.list"
 RUN_TOUCHED_PACKAGES_FILE="$STATE_DIR/touched-packages.run"
-DATA_FONT_BACKUP_DIR="$STATE_DIR/data-font-backups"
-DATA_FONT_BACKUP_MANIFEST="$STATE_DIR/data-font-backups.list"
+LEGACY_DATA_FONT_BACKUP_DIR="$STATE_DIR/data-font-backups"
+LEGACY_DATA_FONT_BACKUP_MANIFEST="$STATE_DIR/data-font-backups.list"
 PACKAGE_SNAPSHOT_FILE="$STATE_DIR/packages.snapshot"
 PACKAGE_SNAPSHOT_CURRENT_FILE="$STATE_DIR/packages.snapshot.current"
 LOCKDIR="$STATE_DIR/run.lock"
+UNINSTALLING_FLAG="$STATE_DIR/uninstalling"
 
 FONT_NAME="${FONT_NAME:-NotoColorEmoji.ttf}"
 FONT_DIR="${FONT_DIR:-$MODPATH/system/fonts}"
 FONT_PATH="${FONT_PATH:-$FONT_DIR/$FONT_NAME}"
 SOURCE_FONT="${SOURCE_FONT:-$MODPATH/Emoji.ttf}"
 EXECUTION_CONTEXT="${EXECUTION_CONTEXT:-runtime}"
+MODULE_ID="$(grep -m1 '^id=' "$MODPATH/module.prop" 2>/dev/null | cut -d'=' -f2-)"
+[ -n "$MODULE_ID" ] || MODULE_ID="$(basename "$MODPATH")"
+PERSISTENT_STATE_DIR="/data/adb/emoji-module-state/$MODULE_ID"
+DATA_FONT_BACKUP_DIR="$PERSISTENT_STATE_DIR/data-font-backups"
+DATA_FONT_BACKUP_MANIFEST="$PERSISTENT_STATE_DIR/data-font-backups.list"
 
 MODE="aggressive"
 CLEAR_GMS_DOWNLOADED_FONTS=false
@@ -136,14 +142,55 @@ get_state() {
 append_unique_line() {
   local target_file="$1"
   local value="$2"
+  local target_dir
 
   [ -n "$target_file" ] || return 0
   [ -n "$value" ] || return 0
 
-  mkdir -p "$STATE_DIR" 2>/dev/null
+  target_dir="${target_file%/*}"
+  if [ "$target_dir" != "$target_file" ]; then
+    mkdir -p "$target_dir" 2>/dev/null
+  else
+    mkdir -p "$STATE_DIR" 2>/dev/null
+  fi
+
   touch "$target_file" 2>/dev/null || return 0
   grep -Fxq "$value" "$target_file" 2>/dev/null && return 0
   printf '%s\n' "$value" >> "$target_file"
+}
+
+path_checksum() {
+  local checksum
+
+  checksum="$(printf '%s' "$1" | cksum)"
+  echo "${checksum%% *}"
+}
+
+file_checksum() {
+  local checksum
+
+  [ -f "$1" ] || return 1
+  checksum="$(cksum "$1" 2>/dev/null)" || return 1
+  echo "${checksum%% *}"
+}
+
+files_are_same() {
+  local first="$1"
+  local second="$2"
+  local first_sum
+  local second_sum
+
+  [ -f "$first" ] || return 1
+  [ -f "$second" ] || return 1
+
+  if command -v cmp >/dev/null 2>&1; then
+    cmp -s "$first" "$second"
+    return $?
+  fi
+
+  first_sum="$(file_checksum "$first")" || return 1
+  second_sum="$(file_checksum "$second")" || return 1
+  [ "$first_sum" = "$second_sum" ]
 }
 
 data_font_backup_path_for() {
@@ -151,33 +198,108 @@ data_font_backup_path_for() {
   local checksum
   local base_name
 
-  checksum="$(printf '%s' "$target_path" | cksum)"
-  checksum="${checksum%% *}"
+  checksum="$(path_checksum "$target_path")"
   base_name="$(basename "$target_path")"
   echo "$DATA_FONT_BACKUP_DIR/${checksum}-${base_name}"
+}
+
+copy_file_preserving_metadata() {
+  local source_path="$1"
+  local target_path="$2"
+
+  cp -p "$source_path" "$target_path" 2>/dev/null || cp -f "$source_path" "$target_path" 2>/dev/null || return 1
+  return 0
+}
+
+capture_file_metadata() {
+  local target_path="$1"
+  local meta_path="$2"
+  local uid
+  local gid
+  local mode
+  local context
+
+  uid="$(stat -c '%u' "$target_path" 2>/dev/null)"
+  gid="$(stat -c '%g' "$target_path" 2>/dev/null)"
+  mode="$(stat -c '%a' "$target_path" 2>/dev/null)"
+  context="$(stat -c '%C' "$target_path" 2>/dev/null)"
+  [ -n "$context" ] || context="$(ls -Zd "$target_path" 2>/dev/null | sed 's/[[:space:]].*//')"
+  [ "$context" = "?" ] && context=""
+
+  {
+    printf 'target=%s\n' "$target_path"
+    [ -n "$uid" ] && printf 'uid=%s\n' "$uid"
+    [ -n "$gid" ] && printf 'gid=%s\n' "$gid"
+    [ -n "$mode" ] && printf 'mode=%s\n' "$mode"
+    [ -n "$context" ] && printf 'context=%s\n' "$context"
+  } > "$meta_path"
+}
+
+restore_file_metadata() {
+  local target_path="$1"
+  local meta_path="$2"
+  local uid
+  local gid
+  local mode
+  local context
+
+  [ -f "$meta_path" ] || return 0
+
+  uid="$(sed -n 's/^uid=//p' "$meta_path" | sed -n '1p')"
+  gid="$(sed -n 's/^gid=//p' "$meta_path" | sed -n '1p')"
+  mode="$(sed -n 's/^mode=//p' "$meta_path" | sed -n '1p')"
+  context="$(sed -n 's/^context=//p' "$meta_path" | sed -n '1p')"
+
+  if [ -n "$uid" ] && [ -n "$gid" ]; then
+    chown "$uid:$gid" "$target_path" 2>/dev/null
+  fi
+
+  [ -n "$mode" ] && chmod "$mode" "$target_path" 2>/dev/null
+  [ -n "$context" ] && chcon "$context" "$target_path" 2>/dev/null
 }
 
 backup_data_font_once() {
   local target_path="$1"
   local backup_path
+  local meta_path
 
   [ -f "$target_path" ] || return 1
   mkdir -p "$DATA_FONT_BACKUP_DIR" 2>/dev/null || return 1
 
   backup_path="$(data_font_backup_path_for "$target_path")"
-  if [ ! -f "$backup_path" ]; then
-    cp -p "$target_path" "$backup_path" 2>/dev/null || cp -f "$target_path" "$backup_path" 2>/dev/null || return 1
-    append_log "INFO: Backed up original data emoji font: $target_path"
+  meta_path="$backup_path.meta"
+
+  if [ -f "$backup_path" ]; then
+    if files_are_same "$target_path" "$FONT_PATH"; then
+      append_unique_line "$DATA_FONT_BACKUP_MANIFEST" "$backup_path|$target_path"
+      trace_log "Existing backup kept; target already matches module font: $target_path"
+      return 0
+    fi
+
+    if files_are_same "$target_path" "$backup_path"; then
+      append_unique_line "$DATA_FONT_BACKUP_MANIFEST" "$backup_path|$target_path"
+      trace_log "Existing backup already matches target: $target_path"
+      return 0
+    fi
+
+    append_log "INFO: Refreshing data emoji font backup after target changed: $target_path"
+  elif files_are_same "$target_path" "$FONT_PATH"; then
+    append_log "WARN: Skipping backup because target already matches module font: $target_path"
+    return 1
   fi
 
+  copy_file_preserving_metadata "$target_path" "$backup_path" || return 1
+  capture_file_metadata "$target_path" "$meta_path"
   append_unique_line "$DATA_FONT_BACKUP_MANIFEST" "$backup_path|$target_path"
+  append_log "INFO: Backed up original data emoji font: $target_path"
   return 0
 }
 
-restore_data_font_backups() {
-  local manifest_file="${1:-$DATA_FONT_BACKUP_MANIFEST}"
+restore_data_font_backup_manifest() {
+  local manifest_file="$1"
   local manifest_line
   local backup_path
+  local meta_path
   local target_path
   local restored=0
   local failed=0
@@ -192,6 +314,7 @@ restore_data_font_backups() {
     [ -n "$manifest_line" ] || continue
     backup_path="${manifest_line%%|*}"
     target_path="${manifest_line#*|}"
+    meta_path="$backup_path.meta"
 
     if [ ! -f "$backup_path" ] || [ ! -f "$target_path" ]; then
       missing=$((missing + 1))
@@ -200,7 +323,8 @@ restore_data_font_backups() {
     fi
 
     umount "$target_path" >/dev/null 2>&1
-    if cp -p "$backup_path" "$target_path" 2>/dev/null || cp -f "$backup_path" "$target_path" 2>/dev/null; then
+    if copy_file_preserving_metadata "$backup_path" "$target_path"; then
+      restore_file_metadata "$target_path" "$meta_path"
       restored=$((restored + 1))
       append_log "INFO: Restored original data emoji font: $target_path"
     else
@@ -210,6 +334,14 @@ restore_data_font_backups() {
   done < "$manifest_file"
 
   append_log "INFO: Data font backup restore summary: restored=$restored failed=$failed missing=$missing"
+}
+
+restore_data_font_backups() {
+  restore_data_font_backup_manifest "$DATA_FONT_BACKUP_MANIFEST"
+
+  if [ "$LEGACY_DATA_FONT_BACKUP_MANIFEST" != "$DATA_FONT_BACKUP_MANIFEST" ]; then
+    restore_data_font_backup_manifest "$LEGACY_DATA_FONT_BACKUP_MANIFEST"
+  fi
 }
 
 begin_runtime_tracking() {
@@ -326,6 +458,7 @@ replace_system_emoji_fonts() {
   local target_path
   local replaced=0
   local failed=0
+  local candidate_file
 
   [ "$MOUNT_MODE" = "full" ] || {
     ui_note "- Skipping system font scan in data-only mode"
@@ -337,8 +470,10 @@ replace_system_emoji_fonts() {
   for search_root in $SYSTEM_FONT_SCAN_DIRS; do
     [ -d "$search_root" ] || continue
     debug_log "Scanning system font directory: $search_root"
+    candidate_file="$STATE_DIR/system-font-candidates.$$"
+    find_emoji_font_candidates "$search_root" > "$candidate_file"
 
-    for source_path in $(find_emoji_font_candidates "$search_root"); do
+    while IFS= read -r source_path; do
       target_path="$(module_font_target_for "$source_path")" || {
         trace_log "Skipped unsupported system candidate path: $source_path"
         continue
@@ -367,7 +502,9 @@ replace_system_emoji_fonts() {
         ui_note "- Failed system font: $source_path"
         trace_log "System replacement failed: $source_path"
       fi
-    done
+    done < "$candidate_file"
+
+    rm -f "$candidate_file" 2>/dev/null
   done
 
   append_log "INFO: System scan summary: replaced=$replaced failed=$failed"
@@ -550,6 +687,7 @@ replace_data_emoji_fonts() {
   local package_name
   local active_package=""
   local skipped_protected=0
+  local candidate_file
 
   ensure_font_payload
   debug_log "Starting broad /data/data emoji font scan"
@@ -558,7 +696,10 @@ replace_data_emoji_fonts() {
     [ -n "$active_package" ] && debug_log "Foreground package during install-time data scan: $active_package"
   fi
 
-  for source_path in $(find_emoji_font_candidates /data/data); do
+  candidate_file="$STATE_DIR/data-font-candidates.$$"
+  find_emoji_font_candidates /data/data > "$candidate_file"
+
+  while IFS= read -r source_path; do
     scanned=$((scanned + 1))
     trace_log "Data font candidate: $source_path"
     package_name="$(extract_package_from_data_path "$source_path")"
@@ -584,7 +725,9 @@ replace_data_emoji_fonts() {
       ui_note "- Failed data font: $source_path"
       trace_log "Data replacement failed: $source_path"
     fi
-  done
+  done < "$candidate_file"
+
+  rm -f "$candidate_file" 2>/dev/null
 
   append_log "INFO: Broad data scan summary: scanned=$scanned replaced=$replaced failed=$failed skipped_protected=$skipped_protected"
 }
@@ -713,6 +856,11 @@ repair_reason() {
 }
 
 run_aggressive_repair() {
+  if [ -f "$UNINSTALLING_FLAG" ]; then
+    append_log "INFO: Repair skipped because module uninstall is in progress"
+    return 0
+  fi
+
   determine_mount_mode
   append_log "INFO: Repair context root=$ROOT_SOLUTION mount=$MOUNT_MODE mode=$MODE"
   diagnostics_enabled && append_log "DEBUG: Trace logging is enabled"
