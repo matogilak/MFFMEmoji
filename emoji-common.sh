@@ -12,6 +12,8 @@ DATA_FONT_PATHS_FILE="$STATE_DIR/data-font-paths.list"
 RUN_DATA_FONT_PATHS_FILE="$STATE_DIR/data-font-paths.run"
 TOUCHED_PACKAGES_FILE="$STATE_DIR/touched-packages.list"
 RUN_TOUCHED_PACKAGES_FILE="$STATE_DIR/touched-packages.run"
+DATA_FONT_BACKUP_DIR="$STATE_DIR/data-font-backups"
+DATA_FONT_BACKUP_MANIFEST="$STATE_DIR/data-font-backups.list"
 PACKAGE_SNAPSHOT_FILE="$STATE_DIR/packages.snapshot"
 PACKAGE_SNAPSHOT_CURRENT_FILE="$STATE_DIR/packages.snapshot.current"
 LOCKDIR="$STATE_DIR/run.lock"
@@ -142,6 +144,72 @@ append_unique_line() {
   touch "$target_file" 2>/dev/null || return 0
   grep -Fxq "$value" "$target_file" 2>/dev/null && return 0
   printf '%s\n' "$value" >> "$target_file"
+}
+
+data_font_backup_path_for() {
+  local target_path="$1"
+  local checksum
+  local base_name
+
+  checksum="$(printf '%s' "$target_path" | cksum)"
+  checksum="${checksum%% *}"
+  base_name="$(basename "$target_path")"
+  echo "$DATA_FONT_BACKUP_DIR/${checksum}-${base_name}"
+}
+
+backup_data_font_once() {
+  local target_path="$1"
+  local backup_path
+
+  [ -f "$target_path" ] || return 1
+  mkdir -p "$DATA_FONT_BACKUP_DIR" 2>/dev/null || return 1
+
+  backup_path="$(data_font_backup_path_for "$target_path")"
+  if [ ! -f "$backup_path" ]; then
+    cp -p "$target_path" "$backup_path" 2>/dev/null || cp -f "$target_path" "$backup_path" 2>/dev/null || return 1
+    append_log "INFO: Backed up original data emoji font: $target_path"
+  fi
+
+  append_unique_line "$DATA_FONT_BACKUP_MANIFEST" "$backup_path|$target_path"
+  return 0
+}
+
+restore_data_font_backups() {
+  local manifest_file="${1:-$DATA_FONT_BACKUP_MANIFEST}"
+  local manifest_line
+  local backup_path
+  local target_path
+  local restored=0
+  local failed=0
+  local missing=0
+
+  [ -f "$manifest_file" ] || {
+    append_log "INFO: No data font backups found for uninstall restore"
+    return 0
+  }
+
+  while IFS= read -r manifest_line; do
+    [ -n "$manifest_line" ] || continue
+    backup_path="${manifest_line%%|*}"
+    target_path="${manifest_line#*|}"
+
+    if [ ! -f "$backup_path" ] || [ ! -f "$target_path" ]; then
+      missing=$((missing + 1))
+      trace_log "Backup restore skipped missing path: backup=$backup_path target=$target_path"
+      continue
+    fi
+
+    umount "$target_path" >/dev/null 2>&1
+    if cp -p "$backup_path" "$target_path" 2>/dev/null || cp -f "$backup_path" "$target_path" 2>/dev/null; then
+      restored=$((restored + 1))
+      append_log "INFO: Restored original data emoji font: $target_path"
+    else
+      failed=$((failed + 1))
+      append_log "WARN: Failed to restore original data emoji font: $target_path"
+    fi
+  done < "$manifest_file"
+
+  append_log "INFO: Data font backup restore summary: restored=$restored failed=$failed missing=$missing"
 }
 
 begin_runtime_tracking() {
@@ -343,6 +411,7 @@ apply_data_font_override() {
 
   [ -f "$target_path" ] || return 1
   umount "$target_path" >/dev/null 2>&1
+  backup_data_font_once "$target_path" || append_log "WARN: Failed to back up data emoji font before replacement: $target_path"
   replace_file_with_font "$target_path" || return 1
 
   if bind_mount_font "$target_path"; then

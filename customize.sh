@@ -38,5 +38,6 @@ set_perm "$FONT_PATH" 0 0 0644
 [ -f "$MODPATH/action.sh" ] && set_perm "$MODPATH/action.sh" 0 0 0755
 [ -f "$MODPATH/service.sh" ] && set_perm "$MODPATH/service.sh" 0 0 0755
 [ -f "$MODPATH/post-fs-data.sh" ] && set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
+[ -f "$MODPATH/uninstall.sh" ] && set_perm "$MODPATH/uninstall.sh" 0 0 0755
 [ -f "$MODPATH/emoji-common.sh" ] && set_perm "$MODPATH/emoji-common.sh" 0 0 0755
 [ -f "$MODPATH/targets.conf" ] && set_perm "$MODPATH/targets.conf" 0 0 0644
