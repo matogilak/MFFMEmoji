@@ -18,6 +18,7 @@ PACKAGE_SNAPSHOT_FILE="$STATE_DIR/packages.snapshot"
 PACKAGE_SNAPSHOT_CURRENT_FILE="$STATE_DIR/packages.snapshot.current"
 LOCKDIR="$STATE_DIR/run.lock"
 UNINSTALLING_FLAG="$STATE_DIR/uninstalling"
+RESTORED_DATA_FONT_TARGETS_FILE=""
 
 FONT_NAME="${FONT_NAME:-NotoColorEmoji.ttf}"
 FONT_DIR="${FONT_DIR:-$MODPATH/system/fonts}"
@@ -301,9 +302,12 @@ restore_data_font_backup_manifest() {
   local backup_path
   local meta_path
   local target_path
+  local package_name
+  local restored_packages=""
   local restored=0
   local failed=0
   local missing=0
+  local skipped=0
 
   [ -f "$manifest_file" ] || {
     append_log "INFO: No data font backups found for uninstall restore"
@@ -316,15 +320,33 @@ restore_data_font_backup_manifest() {
     target_path="${manifest_line#*|}"
     meta_path="$backup_path.meta"
 
+    if [ -n "$RESTORED_DATA_FONT_TARGETS_FILE" ] && grep -Fxq "$target_path" "$RESTORED_DATA_FONT_TARGETS_FILE" 2>/dev/null; then
+      skipped=$((skipped + 1))
+      trace_log "Backup restore skipped; target already restored: $target_path"
+      continue
+    fi
+
     if [ ! -f "$backup_path" ] || [ ! -f "$target_path" ]; then
       missing=$((missing + 1))
       trace_log "Backup restore skipped missing path: backup=$backup_path target=$target_path"
       continue
     fi
 
+    if files_are_same "$backup_path" "$FONT_PATH"; then
+      skipped=$((skipped + 1))
+      append_log "WARN: Skipped contaminated data font backup matching module font: $target_path"
+      continue
+    fi
+
     umount "$target_path" >/dev/null 2>&1
     if copy_file_preserving_metadata "$backup_path" "$target_path"; then
       restore_file_metadata "$target_path" "$meta_path"
+      [ -n "$RESTORED_DATA_FONT_TARGETS_FILE" ] && append_unique_line "$RESTORED_DATA_FONT_TARGETS_FILE" "$target_path"
+      package_name="$(extract_package_from_data_path "$target_path")"
+      case " $restored_packages " in
+        *" $package_name "*) ;;
+        *) restored_packages="$restored_packages $package_name" ;;
+      esac
       restored=$((restored + 1))
       append_log "INFO: Restored original data emoji font: $target_path"
     else
@@ -333,15 +355,26 @@ restore_data_font_backup_manifest() {
     fi
   done < "$manifest_file"
 
-  append_log "INFO: Data font backup restore summary: restored=$restored failed=$failed missing=$missing"
+  for package_name in $restored_packages; do
+    [ -n "$package_name" ] || continue
+    clear_package_cache "$package_name"
+  done
+
+  append_log "INFO: Data font backup restore summary: restored=$restored failed=$failed missing=$missing skipped=$skipped"
 }
 
 restore_data_font_backups() {
+  RESTORED_DATA_FONT_TARGETS_FILE="$STATE_DIR/restored-data-font-targets.$$"
+  : > "$RESTORED_DATA_FONT_TARGETS_FILE"
+
   restore_data_font_backup_manifest "$DATA_FONT_BACKUP_MANIFEST"
 
   if [ "$LEGACY_DATA_FONT_BACKUP_MANIFEST" != "$DATA_FONT_BACKUP_MANIFEST" ]; then
     restore_data_font_backup_manifest "$LEGACY_DATA_FONT_BACKUP_MANIFEST"
   fi
+
+  rm -f "$RESTORED_DATA_FONT_TARGETS_FILE" 2>/dev/null
+  RESTORED_DATA_FONT_TARGETS_FILE=""
 }
 
 begin_runtime_tracking() {
